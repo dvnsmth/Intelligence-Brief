@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Intelligence Brief{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="header">
+        <h1>Geopolitical Risk Dashboard</h1>
+        <p class="subtitle">Monitor risk and stability scores for key regions</p>
+    </div>
+    
+    <div class="controls">
+        <div class="search-filter-bar">
+            <input type="text" id="search-input" placeholder="Search countries..." class="search-input">
+            <select id="sort-select" class="sort-select">
+                <option value="score-asc">Score (Low to High)</option>
+                <option value="score-desc">Score (High to Low)</option>
+                <option value="delta-desc">Delta (Most Negative)</option>
+                <option value="delta-asc">Delta (Most Positive)</option>
+                <option value="name-asc">Name (A-Z)</option>
+            </select>
+            <button class="btn btn-primary" onclick="runPipeline()">Run Pipeline</button>
+        </div>
+        <span id="pipeline-status"></span>
+    </div>
+    
+    <div class="charts-section">
+        <div class="chart-container">
+            <h3>Risk Distribution</h3>
+            <canvas id="riskDistributionChart"></canvas>
+        </div>
+        <div class="chart-container">
+            <h3>Top Risk Countries</h3>
+            <canvas id="topRiskChart"></canvas>
+        </div>
+    </div>
+    
+    <div class="countries-grid" id="countries-grid">
+        {% for country in countries %}
+        <div class="country-card">
+            <h3><a href="{{ url_for('region_detail', target=country.name) }}">{{ country.name }}</a></h3>
+            {% if country.score is not none %}
+            <div class="score-display">
+                <div class="score-value">{{ "%.1f"|format(country.score) }}</div>
+                <div class="score-label">Stability Score</div>
+                {% if country.delta_7d != 0 %}
+                <div class="delta {% if country.delta_7d < 0 %}negative{% else %}positive{% endif %}">
+                    {{ "%+.1f"|format(country.delta_7d) }} (7d)
+                </div>
+                {% endif %}
+            </div>
+            <div class="score-bar">
+                <div class="score-fill" style="width: {{ country.score }}%"></div>
+            </div>
+            {% else %}
+            <div class="no-data">No data available</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const countriesData = {{ countries|tojson }};
+
+function runPipeline() {
+    const statusEl = document.getElementById('pipeline-status');
+    statusEl.textContent = 'Running pipeline...';
+    statusEl.className = 'status-running';
+    
+    fetch('/run-pipeline', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            statusEl.textContent = `Pipeline complete: ${data.results.events} events, ${data.results.assessments} assessments`;
+            statusEl.className = 'status-success';
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            statusEl.textContent = 'Error: ' + data.error;
+            statusEl.className = 'status-error';
+        }
+    })
+    .catch(error => {
+        statusEl.textContent = 'Error: ' + error.message;
+        statusEl.className = 'status-error';
+    });
+}
+
+// Initialize charts
+function initCharts() {
+    const countriesWithScores = countriesData.filter(c => c.score !== null);
+    
+    // Risk Distribution Chart
+    const riskRanges = {
+        'High Risk (0-40)': countriesWithScores.filter(c => c.score <= 40).length,
+        'Medium Risk (41-60)': countriesWithScores.filter(c => c.score > 40 && c.score <= 60).length,
+        'Low Risk (61-80)': countriesWithScores.filter(c => c.score > 60 && c.score <= 80).length,
+        'Stable (81-100)': countriesWithScores.filter(c => c.score > 80).length
+    };
+    
+    new Chart(document.getElementById('riskDistributionChart'), {
+        type: 'doughnut',
+        data: {
+            labels: Object.keys(riskRanges),
+            datasets: [{
+                data: Object.values(riskRanges),
+                backgroundColor: ['#dc3545', '#ffc107', '#17a2b8', '#28a745']
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: { position: 'bottom' }
+            }
+        }
+    });
+    
+    // Top Risk Countries Chart
+    const sortedByRisk = [...countriesWithScores].sort((a, b) => a.score - b.score).slice(0, 10);
+    new Chart(document.getElementById('topRiskChart'), {
+        type: 'bar',
+        data: {
+            labels: sortedByRisk.map(c => c.name),
+            datasets: [{
+                label: 'Stability Score',
+                data: sortedByRisk.map(c => c.score),
+                backgroundColor: sortedByRisk.map(c => 
+                    c.score <= 40 ? '#dc3545' : 
+                    c.score <= 60 ? '#ffc107' : 
+                    c.score <= 80 ? '#17a2b8' : '#28a745'
+                )
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            indexAxis: 'y',
+            scales: {
+                x: { max: 100, title: { display: true, text: 'Stability Score' } }
+            },
+            plugins: {
+                legend: { display: false }
+            }
+        }
+    });
+}
+
+// Search and filter functionality
+function setupSearchAndFilter() {
+    const searchInput = document.getElementById('search-input');
+    const sortSelect = document.getElementById('sort-select');
+    const grid = document.getElementById('countries-grid');
+    
+    function filterAndSort() {
+        const searchTerm = searchInput.value.toLowerCase();
+        const sortValue = sortSelect.value;
+        
+        let filtered = countriesData.filter(c => 
+            c.name.toLowerCase().includes(searchTerm)
+        );
+        
+        // Sort
+        filtered.sort((a, b) => {
+            switch(sortValue) {
+                case 'score-asc':
+                    return (a.score || 100) - (b.score || 100);
+                case 'score-desc':
+                    return (b.score || 100) - (a.score || 100);
+                case 'delta-desc':
+                    return (a.delta_7d || 0) - (b.delta_7d || 0);
+                case 'delta-asc':
+                    return (b.delta_7d || 0) - (a.delta_7d || 0);
+                case 'name-asc':
+                    return a.name.localeCompare(b.name);
+                default:
+                    return 0;
+            }
+        });
+        
+        // Re-render grid
+        grid.innerHTML = filtered.map(country => {
+            const scoreHtml = country.score !== null ? `
+                <div class="score-display">
+                    <div class="score-value">${country.score.toFixed(1)}</div>
+                    <div class="score-label">Stability Score</div>
+                    ${country.delta_7d !== 0 ? `
+                    <div class="delta ${country.delta_7d < 0 ? 'negative' : 'positive'}">
+                        ${country.delta_7d > 0 ? '+' : ''}${country.delta_7d.toFixed(1)} (7d)
+                    </div>` : ''}
+                </div>
+                <div class="score-bar">
+                    <div class="score-fill" style="width: ${country.score}%"></div>
+                </div>
+            ` : '<div class="no-data">No data available</div>';
+            
+            const regionUrl = `/region/${encodeURIComponent(country.name)}`;
+            return `
+                <div class="country-card">
+                    <h3><a href="${regionUrl}">${country.name}</a></h3>
+                    ${scoreHtml}
+                </div>
+            `;
+        }).join('');
+    }
+    
+    searchInput.addEventListener('input', filterAndSort);
+    sortSelect.addEventListener('change', filterAndSort);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    initCharts();
+    setupSearchAndFilter();
+});
+</script>
+{% endblock %}

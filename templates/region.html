@@ -1,0 +1,337 @@
+{% extends "base.html" %}
+
+{% block title %}{{ target }} - Intelligence Brief{% endblock %}
+
+{% block content %}
+<div class="region-detail">
+    <div class="header">
+        <h1>{{ target }}</h1>
+        <a href="{{ url_for('index') }}" class="back-link">← Back to Dashboard</a>
+    </div>
+    
+    {% if assessment %}
+    <section class="assessment-section">
+        <h2>Risk & Stability Assessment</h2>
+        <div class="score-card">
+            <div class="overall-score">
+                <div class="score-value-large">{{ "%.1f"|format(assessment.overall_score) }}</div>
+                <div class="score-label">Overall Stability Score</div>
+                <div class="deltas">
+                    <span class="delta {% if assessment.delta_7d < 0 %}negative{% else %}positive{% endif %}">
+                        7d: {{ "%+.1f"|format(assessment.delta_7d) }}
+                    </span>
+                    <span class="delta {% if assessment.delta_30d < 0 %}negative{% else %}positive{% endif %}">
+                        30d: {{ "%+.1f"|format(assessment.delta_30d) }}
+                    </span>
+                    <span class="delta {% if assessment.delta_90d < 0 %}negative{% else %}positive{% endif %}">
+                        90d: {{ "%+.1f"|format(assessment.delta_90d) }}
+                    </span>
+                </div>
+            </div>
+            
+            <div class="trend-chart-container">
+                <h3>Score Trends</h3>
+                <canvas id="trendChart"></canvas>
+            </div>
+            
+            <div class="sub-scores">
+                <h3>Sub-scores</h3>
+                <div class="sub-score-chart-container">
+                    <canvas id="subScoreChart"></canvas>
+                </div>
+                {% for sub_score in assessment.sub_scores %}
+                <div class="sub-score-item">
+                    <div class="sub-score-header">
+                        <span class="sub-score-name">{{ sub_score.name|title }}</span>
+                        <span class="sub-score-value">{{ "%.1f"|format(sub_score.value) }}/100</span>
+                    </div>
+                    <div class="sub-score-bar">
+                        <div class="sub-score-fill" style="width: {{ sub_score.value }}%"></div>
+                    </div>
+                    {% if sub_score.delta_7d != 0 %}
+                    <div class="sub-score-delta {% if sub_score.delta_7d < 0 %}negative{% else %}positive{% endif %}">
+                        Δ{{ "%+.1f"|format(sub_score.delta_7d) }} (7d)
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+    {% endif %}
+    
+    {% if brief %}
+    <section class="brief-section">
+        <h2>Situation Brief</h2>
+        <div class="brief-card">
+            <div class="brief-section-item">
+                <h3>What Changed</h3>
+                <p class="factual">{{ brief.what_changed }}</p>
+            </div>
+            
+            <div class="brief-section-item">
+                <h3>Why It Matters</h3>
+                <p class="assessment">{{ brief.why_it_matters }}</p>
+            </div>
+            
+            <div class="brief-section-item">
+                <h3>What to Watch</h3>
+                <p>{{ brief.what_to_watch }}</p>
+            </div>
+            
+            {% if brief.citations %}
+            <div class="citations">
+                <h3>Sources ({{ brief.citations|length }})</h3>
+                <ul>
+                    {% for citation in brief.citations[:10] %}
+                    <li>
+                        <a href="{{ citation.url }}" target="_blank">{{ citation.title }}</a>
+                        <span class="source-tier tier-{{ citation.tier }}">{{ citation.tier }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
+    
+    {% if events %}
+    <section class="events-section">
+        <div class="events-header">
+            <h2>Recent Events ({{ events|length }})</h2>
+            <div class="event-filters">
+                <select id="event-type-filter" class="filter-select">
+                    <option value="">All Types</option>
+                    <option value="armed_conflict">Armed Conflict</option>
+                    <option value="sanctions">Sanctions</option>
+                    <option value="civil_unrest">Civil Unrest</option>
+                    <option value="economic_crisis">Economic Crisis</option>
+                    <option value="government_change">Government Change</option>
+                </select>
+                <select id="confidence-filter" class="filter-select">
+                    <option value="">All Confidence Levels</option>
+                    <option value="High">High</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Low">Low</option>
+                </select>
+            </div>
+        </div>
+        <div class="event-timeline-chart">
+            <canvas id="eventTimelineChart"></canvas>
+        </div>
+        <div class="events-list" id="events-list">
+            {% for event in events[:20] %}
+            <div class="event-card" data-event-type="{{ event.event_type }}" data-confidence="{{ event.confidence_label }}">
+                <div class="event-header">
+                    <span class="event-type">{{ event.event_type|replace('_', ' ')|title }}</span>
+                    <span class="event-date">{{ event.timestamp_str }}</span>
+                    <button class="expand-btn" onclick="toggleEventDetails(this)">▼</button>
+                </div>
+                <div class="event-location">📍 {{ event.location }}</div>
+                <div class="event-summary">{{ event.summary }}</div>
+                <div class="event-details" style="display: none;">
+                    <div class="event-full-info">
+                        <p><strong>Confidence:</strong> {{ event.confidence_label }} ({{ "%.2f"|format(event.confidence) }})</p>
+                        {% if event.impact_tags %}
+                        <p><strong>Impact Areas:</strong> {{ event.impact_tags|join(', ') }}</p>
+                        {% endif %}
+                        {% if event.sources %}
+                        <div class="event-sources-full">
+                            <strong>Sources:</strong>
+                            <ul>
+                                {% for source in event.sources %}
+                                <li>
+                                    <a href="{{ source.url }}" target="_blank">{{ source.title }}</a>
+                                    <span class="source-tier tier-{{ source.tier }}">{{ source.tier }}</span>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="event-footer">
+                    <span class="confidence-badge confidence-{{ event.confidence_label|lower }}">{{ event.confidence_label }}</span>
+                    {% if event.impact_tags %}
+                    <span class="impact-tags">
+                        {% for tag in event.impact_tags %}
+                        <span class="tag">{{ tag }}</span>
+                        {% endfor %}
+                    </span>
+                    {% endif %}
+                </div>
+                {% if event.sources %}
+                <div class="event-sources">
+                    <strong>Sources:</strong>
+                    {% for source in event.sources[:3] %}
+                    <a href="{{ source.url }}" target="_blank" class="source-link">{{ source.source_name }}</a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+    
+    {% if not assessment and not brief and not events %}
+    <div class="no-data-message">
+        <p>No data available for {{ target }}.</p>
+        <p>Run the pipeline to ingest and process data.</p>
+        <button class="btn btn-primary" onclick="runPipeline()">Run Pipeline</button>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const assessmentData = {{ assessment|tojson if assessment else 'null' }};
+const eventsData = {{ events|tojson if events else '[]' }};
+
+function runPipeline() {
+    if (confirm('This will run the full pipeline. Continue?')) {
+        fetch('/run-pipeline', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('Pipeline complete! Reloading page...');
+                window.location.reload();
+            } else {
+                alert('Error: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error: ' + error.message);
+        });
+    }
+}
+
+function toggleEventDetails(btn) {
+    const details = btn.closest('.event-card').querySelector('.event-details');
+    const isHidden = details.style.display === 'none';
+    details.style.display = isHidden ? 'block' : 'none';
+    btn.textContent = isHidden ? '▲' : '▼';
+}
+
+function initRegionCharts() {
+    if (!assessmentData) return;
+    
+    // Trend Chart
+    const trendCtx = document.getElementById('trendChart');
+    if (trendCtx) {
+        new Chart(trendCtx, {
+            type: 'line',
+            data: {
+                labels: ['90d ago', '30d ago', '7d ago', 'Now'],
+                datasets: [{
+                    label: 'Stability Score',
+                    data: [
+                        assessmentData.overall_score - assessmentData.delta_90d,
+                        assessmentData.overall_score - assessmentData.delta_30d,
+                        assessmentData.overall_score - assessmentData.delta_7d,
+                        assessmentData.overall_score
+                    ],
+                    borderColor: '#0066cc',
+                    backgroundColor: 'rgba(0, 102, 204, 0.1)',
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: { min: 0, max: 100 }
+                }
+            }
+        });
+    }
+    
+    // Sub-score Chart
+    const subScoreCtx = document.getElementById('subScoreChart');
+    if (subScoreCtx && assessmentData.sub_scores) {
+        new Chart(subScoreCtx, {
+            type: 'radar',
+            data: {
+                labels: assessmentData.sub_scores.map(s => s.name),
+                datasets: [{
+                    label: 'Current Scores',
+                    data: assessmentData.sub_scores.map(s => s.value),
+                    backgroundColor: 'rgba(0, 102, 204, 0.2)',
+                    borderColor: '#0066cc'
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    r: { min: 0, max: 100 }
+                }
+            }
+        });
+    }
+    
+    // Event Timeline Chart
+    const timelineCtx = document.getElementById('eventTimelineChart');
+    if (timelineCtx && eventsData.length > 0) {
+        const eventTypes = {};
+        eventsData.forEach(e => {
+            const type = e.event_type.replace(/_/g, ' ');
+            eventTypes[type] = (eventTypes[type] || 0) + 1;
+        });
+        
+        new Chart(timelineCtx, {
+            type: 'bar',
+            data: {
+                labels: Object.keys(eventTypes),
+                datasets: [{
+                    label: 'Event Count',
+                    data: Object.values(eventTypes),
+                    backgroundColor: '#0066cc'
+                }]
+            },
+            options: {
+                responsive: true,
+                indexAxis: 'y',
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+    }
+}
+
+function setupEventFilters() {
+    const typeFilter = document.getElementById('event-type-filter');
+    const confidenceFilter = document.getElementById('confidence-filter');
+    const eventCards = document.querySelectorAll('.event-card');
+    
+    function filterEvents() {
+        const typeValue = typeFilter.value;
+        const confValue = confidenceFilter.value;
+        
+        eventCards.forEach(card => {
+            const cardType = card.dataset.eventType;
+            const cardConf = card.dataset.confidence;
+            
+            const typeMatch = !typeValue || cardType === typeValue;
+            const confMatch = !confValue || cardConf === confValue;
+            
+            card.style.display = (typeMatch && confMatch) ? 'block' : 'none';
+        });
+    }
+    
+    typeFilter?.addEventListener('change', filterEvents);
+    confidenceFilter?.addEventListener('change', filterEvents);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    initRegionCharts();
+    setupEventFilters();
+});
+</script>
+{% endblock %}

@@ -1,0 +1,37 @@
+# Core dependencies
+python-dateutil>=2.8.2
+pytz>=2024.1
+
+# Data processing
+requests>=2.31.0
+feedparser>=6.0.10
+beautifulsoup4>=4.12.2
+lxml>=5.1.0
+
+# Language processing
+langdetect>=1.0.9
+googletrans==4.0.0rc1  # Note: May need alternative for production
+
+# Entity extraction (using simple regex/rule-based for MVP)
+# For MVP, we'll use basic country/region matching
+
+# Database
+sqlalchemy>=2.0.23
+
+# Configuration
+pyyaml>=6.0.1
+
+# Testing
+pytest>=7.4.3
+pytest-cov>=4.1.0
+
+# API (optional, for simple web interface)
+flask>=3.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+
+# Data analysis and caching
+requests-cache>=1.0.0
+pandas>=2.0.0
+geopy>=2.3.0

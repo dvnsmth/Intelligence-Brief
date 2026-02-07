@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+
+{% block title %}Map View - Intelligence Brief{% endblock %}
+
+{% block content %}
+<div class="map-view">
+    <div class="header">
+        <h1>Global Risk Map</h1>
+        <a href="{{ url_for('index') }}" class="back-link">← Back to Dashboard</a>
+    </div>
+    
+    <div class="map-controls">
+        <select id="map-filter-type" class="filter-select">
+            <option value="">All Event Types</option>
+            <option value="armed_conflict">Armed Conflict</option>
+            <option value="sanctions">Sanctions</option>
+            <option value="civil_unrest">Civil Unrest</option>
+            <option value="economic_crisis">Economic Crisis</option>
+            <option value="government_change">Government Change</option>
+        </select>
+        <select id="map-filter-date" class="filter-select">
+            <option value="7">Last 7 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+            <option value="all">All time</option>
+        </select>
+        <button class="btn btn-secondary" onclick="toggleRiskOverlay()">Toggle Risk Overlay</button>
+    </div>
+    
+    <div id="map" style="height: 600px; width: 100%; margin: 20px 0; border-radius: 8px;"></div>
+    
+    <div class="map-legend">
+        <h3>Legend</h3>
+        <div class="legend-items">
+            <div class="legend-item">
+                <span class="legend-marker" style="background-color: #dc3545;"></span>
+                <span>High Risk (0-40)</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-marker" style="background-color: #ffc107;"></span>
+                <span>Medium Risk (41-60)</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-marker" style="background-color: #17a2b8;"></span>
+                <span>Low Risk (61-80)</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-marker" style="background-color: #28a745;"></span>
+                <span>Stable (81-100)</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let map;
+let markers = [];
+let riskOverlay = false;
+let currentTileProvider = 0;
+let tileLayer = null;
+
+// Tile provider configurations with fallbacks
+const tileProviders = [
+    {
+        name: 'OpenStreetMap',
+        url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        attribution: '© OpenStreetMap contributors',
+        options: {
+            maxZoom: 19
+        }
+    },
+    {
+        name: 'CartoDB Positron',
+        url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+        attribution: '© OpenStreetMap contributors © CARTO',
+        options: {
+            maxZoom: 19,
+            subdomains: 'abcd'
+        }
+    },
+    {
+        name: 'CartoDB Dark Matter',
+        url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+        attribution: '© OpenStreetMap contributors © CARTO',
+        options: {
+            maxZoom: 19,
+            subdomains: 'abcd'
+        }
+    }
+];
+
+function initMap() {
+    console.log('[DEBUG] initMap() called');
+    console.log('[DEBUG] Leaflet available:', typeof L !== 'undefined');
+    console.log('[DEBUG] Map container exists:', document.getElementById('map') !== null);
+    
+    if (typeof L === 'undefined') {
+        console.error('[ERROR] Leaflet.js not loaded!');
+        document.getElementById('map').innerHTML = '<p style="padding: 20px; color: red;">Error: Leaflet.js map library failed to load. Please check your internet connection.</p>';
+        return;
+    }
+    
+    const mapContainer = document.getElementById('map');
+    if (!mapContainer) {
+        console.error('[ERROR] Map container not found!');
+        return;
+    }
+    
+    try {
+        map = L.map('map').setView([20, 0], 2);
+        console.log('[DEBUG] Map created successfully');
+        
+        // Initialize with first tile provider
+        loadTileLayer(0);
+        
+        // Listen for tile errors
+        map.on('tileerror', function(error, tile) {
+            console.warn('[WARN] Tile loading error:', error);
+            handleTileError();
+        });
+        
+        console.log('[DEBUG] Tile layer added');
+        loadMapData();
+    } catch (error) {
+        console.error('[ERROR] Failed to initialize map:', error);
+        mapContainer.innerHTML = '<p style="padding: 20px; color: red;">Error initializing map: ' + error.message + '</p>';
+    }
+}
+
+function loadTileLayer(providerIndex) {
+    if (providerIndex >= tileProviders.length) {
+        console.error('[ERROR] All tile providers failed');
+        showTileError();
+        return;
+    }
+    
+    const provider = tileProviders[providerIndex];
+    console.log(`[DEBUG] Loading tile provider: ${provider.name} (${providerIndex + 1}/${tileProviders.length})`);
+    
+    // Show provider switch notification if not first load
+    if (providerIndex > 0) {
+        showProviderNotification(`Switching to ${provider.name}...`);
+    }
+    
+    // Remove existing tile layer if present
+    if (tileLayer) {
+        map.removeLayer(tileLayer);
+        tileLayer = null;
+    }
+    
+    // Create new tile layer
+    tileLayer = L.tileLayer(provider.url, {
+        ...provider.options,
+        attribution: provider.attribution,
+        errorTileUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+    });
+    
+    // Track tile load success/failure
+    let tilesLoaded = 0;
+    let tilesFailed = 0;
+    const maxFailures = 5; // Switch provider after 5 failed tiles
+    
+    // Set up error handling for this layer
+    tileLayer.on('tileerror', function(error, tile) {
+        tilesFailed++;
+        console.warn(`[WARN] Tile error for ${provider.name} (${tilesFailed}/${maxFailures}):`, error);
+        
+        // If too many tiles fail, try next provider
+        if (tilesFailed >= maxFailures && currentTileProvider === providerIndex) {
+            console.log(`[DEBUG] Too many tile failures, switching to next provider...`);
+            setTimeout(() => {
+                if (currentTileProvider === providerIndex) {
+                    loadTileLayer(providerIndex + 1);
+                }
+            }, 1000);
+        }
+    });
+    
+    // Success callback
+    tileLayer.on('tileload', function() {
+        tilesLoaded++;
+        if (tilesLoaded === 1) {
+            console.log(`[DEBUG] First tile loaded successfully from ${provider.name}`);
+            hideProviderNotification();
+        }
+    });
+    
+    // Add to map
+    tileLayer.addTo(map);
+    currentTileProvider = providerIndex;
+    
+    // Set a timeout to check if tiles are loading
+    setTimeout(() => {
+        if (currentTileProvider === providerIndex && tilesLoaded === 0 && tilesFailed > 0) {
+            console.log(`[DEBUG] No tiles loaded after timeout, trying next provider...`);
+            loadTileLayer(providerIndex + 1);
+        }
+    }, 5000);
+}
+
+function showProviderNotification(message) {
+    // Remove existing notification if any
+    const existing = document.getElementById('tile-provider-notification');
+    if (existing) {
+        existing.remove();
+    }
+    
+    const notification = document.createElement('div');
+    notification.id = 'tile-provider-notification';
+    notification.style.cssText = 'position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: #17a2b8; color: white; padding: 10px 20px; border-radius: 5px; z-index: 1000; box-shadow: 0 2px 10px rgba(0,0,0,0.3); font-size: 14px;';
+    notification.textContent = message;
+    map.getContainer().appendChild(notification);
+}
+
+function hideProviderNotification() {
+    const notification = document.getElementById('tile-provider-notification');
+    if (notification) {
+        notification.style.transition = 'opacity 0.5s';
+        notification.style.opacity = '0';
+        setTimeout(() => notification.remove(), 500);
+    }
+}
+
+function handleTileError() {
+    // This function is called by the map-level tileerror handler
+    // The tile layer-specific handler in loadTileLayer handles provider switching
+    console.log('[DEBUG] Map-level tile error detected');
+}
+
+function showTileError() {
+    const errorMsg = document.createElement('div');
+    errorMsg.style.cssText = 'position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: #dc3545; color: white; padding: 15px 20px; border-radius: 5px; z-index: 1000; box-shadow: 0 2px 10px rgba(0,0,0,0.3);';
+    errorMsg.innerHTML = `
+        <strong>Map Tiles Failed to Load</strong><br>
+        <small>Unable to load map tiles from any provider. Please check your internet connection.</small><br>
+        <button onclick="location.reload()" style="margin-top: 10px; padding: 5px 15px; background: white; color: #dc3545; border: none; border-radius: 3px; cursor: pointer;">Retry</button>
+    `;
+    map.getContainer().appendChild(errorMsg);
+}
+
+function loadMapData() {
+    console.log('[DEBUG] loadMapData() called');
+    const eventType = document.getElementById('map-filter-type')?.value || '';
+    const days = document.getElementById('map-filter-date')?.value || 90;
+    
+    const url = `/api/map-data?type=${encodeURIComponent(eventType)}&days=${encodeURIComponent(days)}`;
+    console.log('[DEBUG] Fetching:', url);
+    
+    fetch(url)
+        .then(response => {
+            console.log('[DEBUG] Response status:', response.status);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('[DEBUG] Map data received:', data);
+            console.log('[DEBUG] Events count:', data.events?.length || 0);
+            console.log('[DEBUG] Countries count:', data.countries?.length || 0);
+            displayEvents(data.events || []);
+            if (riskOverlay) {
+                displayRiskOverlay(data.countries || []);
+            }
+        })
+        .catch(error => {
+            console.error('[ERROR] Error loading map data:', error);
+            if (map) {
+                map.getContainer().innerHTML += '<div style="position: absolute; top: 10px; right: 10px; background: red; color: white; padding: 10px; z-index: 1000;">Error loading map data: ' + error.message + '</div>';
+            }
+        });
+}
+
+function displayEvents(events) {
+    // Clear existing markers
+    markers.forEach(m => map.removeLayer(m));
+    markers = [];
+    
+    events.forEach(event => {
+        // Try to geocode location (simplified - would use geopy in production)
+        const coords = getCoordinatesForLocation(event.location);
+        if (coords) {
+            const marker = L.marker(coords).addTo(map);
+            marker.bindPopup(`
+                <strong>${event.event_type.replace(/_/g, ' ')}</strong><br>
+                ${event.location}<br>
+                ${event.timestamp_str}<br>
+                <a href="/region/${encodeURIComponent(event.location)}">View Details</a>
+            `);
+            markers.push(marker);
+        }
+    });
+}
+
+function displayRiskOverlay(countries) {
+    // This would require country boundary data (GeoJSON)
+    // For MVP, we'll use circle markers for countries
+    countries.forEach(country => {
+        const coords = getCoordinatesForLocation(country.name);
+        if (coords) {
+            const color = getRiskColor(country.score);
+            const circle = L.circle(coords, {
+                radius: 500000,
+                color: color,
+                fillColor: color,
+                fillOpacity: 0.3
+            }).addTo(map);
+            circle.bindPopup(`${country.name}: ${country.score.toFixed(1)}`);
+        }
+    });
+}
+
+function getCoordinatesForLocation(location) {
+    // Simplified geocoding - in production would use geopy
+    const countryCoords = {
+        'United States': [39.8283, -98.5795],
+        'China': [35.8617, 104.1954],
+        'Germany': [51.1657, 10.4515],
+        'Japan': [36.2048, 138.2529],
+        'India': [20.5937, 78.9629],
+        'United Kingdom': [55.3781, -3.4360],
+        'France': [46.2276, 2.2137],
+        'Russia': [61.5240, 105.3188],
+        'Brazil': [-14.2350, -51.9253],
+        'Canada': [56.1304, -106.3468]
+    };
+    
+    for (const [country, coords] of Object.entries(countryCoords)) {
+        if (location.toLowerCase().includes(country.toLowerCase())) {
+            return coords;
+        }
+    }
+    return null;
+}
+
+function getRiskColor(score) {
+    if (score <= 40) return '#dc3545';
+    if (score <= 60) return '#ffc107';
+    if (score <= 80) return '#17a2b8';
+    return '#28a745';
+}
+
+function toggleRiskOverlay() {
+    riskOverlay = !riskOverlay;
+    loadMapData();
+}
+
+document.getElementById('map-filter-type')?.addEventListener('change', loadMapData);
+document.getElementById('map-filter-date')?.addEventListener('change', loadMapData);
+
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('[DEBUG] DOMContentLoaded fired');
+    console.log('[DEBUG] Leaflet loaded:', typeof L !== 'undefined');
+    // Small delay to ensure Leaflet is fully loaded
+    setTimeout(initMap, 100);
+});
+</script>
+{% endblock %}
